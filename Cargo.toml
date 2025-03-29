@@ -1,0 +1,14 @@
+[package]
+name = "osc-booper"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.5.34", features = ["derive"] }
+dotenvy = "0.15.7"
+env_logger = "0.11.7"
+jiff = { version = "0.2.5", features = ["serde"] }
+log = "0.4.27"
+rosc = "0.11.4"
+serde = { version = "1.0.219", features = ["derive"] }
+toml = "0.8.14"
