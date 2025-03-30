@@ -1,4 +1,9 @@
-use std::{net::{SocketAddrV4, UdpSocket}, ops::Add, str::FromStr};
+use std::{
+    net::{SocketAddrV4, UdpSocket},
+    ops::Add,
+    str::FromStr,
+};
+
 use jiff::{SignedDuration, Timestamp};
 use log::{debug, error, info};
 use rosc::{OscMessage, OscPacket, OscType};
@@ -92,7 +97,12 @@ impl OscBooper {
 
     /// Handle received OSC message
     fn handle_message(&mut self, message: &OscMessage) {
-        if message.addr.ends_with("/OSCBoop") {
+        if message.addr.ends_with("/OSCBoop") && !message.args.is_empty(){
+            // skip when contact sender leaves receiver bubble
+            // let's assume that only bools will be sent
+            if let OscType::Bool(false) = message.args[0] {
+                return;
+            }
             self.storage.inc_boops();
 
             let (message, contains_funny) = self.storage.generate_message();
