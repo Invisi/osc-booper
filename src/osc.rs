@@ -124,11 +124,14 @@ impl OscBooper {
             let avatar_id = message.args[0].to_string();
             info!("avatar switched to {avatar_id}");
 
-            // todo: listen to avatar change event (/avatar/change) and then query
-            //      if avatar is compatible via OSC capability query
-            // https://github.com/vrchat-community/osc/wiki/OSCQuery
+            // todo: listen to avatar change event (/avatar/change) and then
+            // query if avatar is compatible via OSC capability
+            // query https://github.com/vrchat-community/osc/wiki/OSCQuery
             // https://github.com/Vidvox/OSCQueryProposal
             // todo: advertise configured port and receive data
+
+            // world or avatar swap, save unconditionally
+            self.storage.save();
         }
 
         // save storage if it's been a while
