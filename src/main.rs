@@ -1,4 +1,6 @@
+
 use dotenvy::dotenv;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::{config::Options, osc::OscBooper};
@@ -16,12 +18,19 @@ async fn main() {
         .with(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    let opt = Options::new();
-    let mut osc = OscBooper::new(opt.send).await;
-    oscquery::announce(osc.osc_port).await;
+    let token = CancellationToken::new();
+    setup_signal_handlers(token.clone()).await;
 
     // todo: get sending port from VRC mDNS response
-    osc.run().await;
+
+    let opt = Options::new();
+    let mut osc = OscBooper::new(opt.send).await;
+
+    // set up OSCQuery & mDNS announcements
+    oscquery::announce(token.clone(), osc.osc_port).await;
+
+    // run main loop
+    osc.run(token.clone()).await;
 
     // todo: prometheus interface for metrics
     //      - can I include avatar ID in there as label?
@@ -30,4 +39,66 @@ async fn main() {
 
     // todo: ovr overlay with buttons or interact with application
     //      (pause, post again) via OSC messages?
+}
+
+#[cfg(unix)]
+async fn setup_signal_handlers(token: CancellationToken) {
+    // https://docs.rs/tokio/latest/tokio/signal/unix/struct.Signal.html
+    use tokio::signal::{
+        unix,
+        unix::{SignalKind, signal},
+    };
+
+    let mut sigterm = signal(SignalKind::terminate()).unwrap();
+    let mut sigint = signal(SignalKind::interrupt()).unwrap();
+
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = sigterm.recv() => {
+                tracing::debug!("received SIGTERM");
+                token.cancel();
+            },
+            _ = sigint.recv() => {
+                tracing::info!("received SIGINT");
+                token.cancel();
+            }
+        }
+    });
+
+    tracing::debug!("waiting for unix signal");
+}
+
+#[cfg(windows)]
+async fn setup_signal_handlers(token: CancellationToken) {
+    // https://docs.rs/tokio/latest/tokio/signal/windows/index.html
+    // https://learn.microsoft.com/en-us/windows/console/console-control-handlers
+    use tokio::signal::windows;
+
+    let mut ctrl_break = windows::ctrl_break().unwrap();
+    let mut ctrl_c = windows::ctrl_c().unwrap();
+    let mut ctrl_close = windows::ctrl_close().unwrap();
+    let mut ctrl_shutdown = windows::ctrl_shutdown().unwrap();
+
+    tokio::spawn(async move {
+        tokio::select! {
+            _ = ctrl_break.recv() => {
+                tracing::debug!("received CTRL_BREAK");
+                token.cancel();
+            },
+            _ = ctrl_c.recv() => {
+                tracing::info!("received CTRL_C");
+                token.cancel();
+            },
+            _ = ctrl_close.recv() => {
+                tracing::debug!("received CTRL_CLOSE");
+                token.cancel();
+            },
+            _ = ctrl_shutdown.recv() => {
+                tracing::debug!("received CTRL_SHUTDOWN");
+                token.cancel();
+            },
+        };
+    });
+
+    tracing::debug!("waiting for windows signal");
 }

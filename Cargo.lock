@@ -757,7 +757,7 @@ checksum = "42f5e15c9953c5e4ccceeb2e7382a716482c34515315f7b03532b8b4e8393d2d"
 
 [[package]]
 name = "osc-booper"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "clap",
  "dotenvy",
@@ -770,6 +770,7 @@ dependencies = [
  "smallvec",
  "socket2",
  "tokio",
+ "tokio-util",
  "toml",
  "tracing",
  "tracing-subscriber",

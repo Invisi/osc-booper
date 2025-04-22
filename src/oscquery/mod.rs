@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::SocketAddr, time::Duration};
+use std::{collections::HashMap, net::SocketAddr};
 
 use oscquery::{
     node::{AccessMode, HostInfo, OSCTransport, OscNode, OscType, OscTypeTag},
@@ -6,11 +6,12 @@ use oscquery::{
 };
 use rand::distr::{Alphanumeric, SampleString};
 use tokio::net::TcpListener;
-use tracing::info;
+use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
 
 pub mod mdns;
 
-pub async fn announce(osc_port: u16) {
+pub async fn announce(token: CancellationToken, osc_port: u16) {
     // listener is dropped after this context to allow oscquery to bind again
     // this is kinda stupid, but it'll do for now
     let http_addr = {
@@ -23,15 +24,21 @@ pub async fn announce(osc_port: u16) {
 
     info!("announcing ourselves as {service_name}");
 
-    // todo: cancellation token & signal listeners
-    start_oscjson_server(service_name.clone(), http_addr, osc_port).await;
+    start_oscjson_server(token.clone(), service_name.clone(), http_addr, osc_port).await;
+
+    let mdns_token = token.clone();
     tokio::task::spawn(async move {
         let mut server = mdns::MdnsServer::new(&service_name, http_addr.port());
-        server.run().await;
+        server.run(mdns_token).await;
     });
 }
 
-async fn start_oscjson_server(service_name: String, socket_addr: SocketAddr, osc_port: u16) {
+async fn start_oscjson_server(
+    token: CancellationToken,
+    service_name: String,
+    socket_addr: SocketAddr,
+    osc_port: u16,
+) {
     let mut server = OscQueryServer::new(HostInfo {
         name: Some(service_name),
         osc_ip: Some("127.0.0.1".into()),
@@ -79,13 +86,14 @@ async fn start_oscjson_server(service_name: String, socket_addr: SocketAddr, osc
     info!("oscjson server listening on {}", socket_addr);
 
     tokio::task::spawn(async move {
-        let join = server.serve().await;
-
-        // todo: keep server alive until we close
-        tokio::time::sleep(Duration::from_secs(600)).await;
-
-        info!("oscjson server stopping");
-        server.shutdown();
-        join.await.unwrap().unwrap();
+        tokio::select! {
+            _ = server.serve().await => {
+                warn!("oscjson server stopped unexpectedly");
+            },
+            _ = token.cancelled() => {
+                server.shutdown();
+                info!("stopping oscjson server");
+            },
+        }
     });
 }

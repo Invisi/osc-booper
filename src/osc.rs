@@ -1,12 +1,10 @@
-use std::{
-    net::SocketAddr,
-    ops::Add,
-};
+use std::{net::SocketAddr, ops::Add};
 
 use jiff::{SignedDuration, Timestamp};
 use rosc::{OscMessage, OscPacket, OscType};
 use tokio::net::UdpSocket;
-use tracing::{debug, error, info};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 use crate::storage::BoopStorage;
 
@@ -55,30 +53,44 @@ impl OscBooper {
 
 impl OscBooper {
     /// Main program loop
-    pub(crate) async fn run(&mut self) {
+    pub(crate) async fn run(&mut self, token: CancellationToken) {
         let mut buf = [0u8; rosc::decoder::MTU];
 
-        loop {
-            match self.socket.recv_from(&mut buf).await {
-                Ok((size, addr)) => {
-                    let packet = match rosc::decoder::decode_udp(&buf[..size]) {
-                        Ok((_, packet)) => Some(packet),
-                        Err(e) => {
-                            error!(err=%e, "failed to parse packet from {addr}");
-                            None
-                        }
-                    };
+        let mut listener_loop = async || {
+            loop {
+                match self.socket.recv_from(&mut buf).await {
+                    Ok((size, addr)) => {
+                        let packet = match rosc::decoder::decode_udp(&buf[..size]) {
+                            Ok((_, packet)) => Some(packet),
+                            Err(e) => {
+                                error!(err=%e, addr=%addr, "failed to parse packet");
+                                None
+                            }
+                        };
 
-                    if let Some(packet) = packet {
-                        self.handle_packet(packet).await;
+                        if let Some(packet) = packet {
+                            self.handle_packet(packet).await;
+                        }
+                    }
+                    Err(e) => {
+                        error!(err=%e, "error receiving from socket");
                     }
                 }
-                Err(e) => {
-                    println!("Error receiving from socket: {}", e);
-                    break;
-                }
+            }
+        };
+
+        tokio::select! {
+            _ = token.cancelled() => {
+                info!("stopping osc listener");
+            }
+            _ = listener_loop() => {
+                warn!("osc listener stopped unexpectedly");
             }
         }
+
+        info!("saving boop storage one last time");
+        self.storage.save();
+        info!("see ya!");
     }
 
     /// Handle received OSC packet

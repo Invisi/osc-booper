@@ -10,7 +10,8 @@ use mdns_proto::{
 };
 use smallvec::SmallVec;
 use tokio::net::UdpSocket;
-use tracing::{debug, error, info, trace};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, trace, warn};
 
 // WireShark query
 // (mdns) && (_ws.col.info matches "VRCFT" || _ws.col.info matches "osc-booper")
@@ -85,21 +86,31 @@ impl<'a> MdnsServer<'a> {
         this
     }
 
-    pub(crate) async fn run(&mut self) {
+    pub(crate) async fn run(&mut self, token: CancellationToken) {
         info!("starting mDNS server");
 
         let mut buf = [0u8; 1500];
 
-        loop {
-            match self.socket.recv_from(&mut buf).await {
-                Ok((n, from)) => {
-                    let data = &buf[..n];
-                    self.handle_query(from, data).await;
+        let mut listener_loop = async || {
+            loop {
+                match self.socket.recv_from(&mut buf).await {
+                    Ok((n, from)) => {
+                        let data = &buf[..n];
+                        self.handle_query(from, data).await;
+                    }
+                    Err(e) => {
+                        error!(err=%e, "error receiving from socket");
+                    }
                 }
-                Err(e) => {
-                    error!(err=%e, "error receiving from socket");
-                    break;
-                }
+            }
+        };
+
+        tokio::select! {
+            _ = token.cancelled() => {
+                info!("stopping mDNS server");
+            }
+            _ = listener_loop() => {
+                warn!("mDNS server stopped unexpectedly");
             }
         }
     }
