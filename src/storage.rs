@@ -1,8 +1,8 @@
 use std::{fs, ops::Sub, path::Path};
 
 use jiff::{SignedDuration, Timestamp, Zoned, civil::Time};
-use log::{debug, error};
 use serde::{Deserialize, Serialize};
+use tracing::{debug, error};
 
 const FILE_NAME: &str = "boops.toml";
 
@@ -13,7 +13,7 @@ pub(crate) struct BoopStorage {
 
     /// Today's boops
     ///
-    /// resets on midnight, local TZ
+    /// Resets on midnight, local TZ
     today_boops: u32,
 
     /// Highest daily boops achieved
@@ -54,14 +54,14 @@ impl BoopStorage {
             let contents = match fs::read_to_string(file) {
                 Ok(contents) => contents,
                 Err(e) => {
-                    error!("failed to read {}: {}", FILE_NAME, e);
+                    error!(err=%e, "failed to read {FILE_NAME}");
                     return BoopStorage::default();
                 }
             };
 
             // parse contents or return to defaults
             return toml::from_str::<BoopStorage>(&contents).unwrap_or_else(|e| {
-                error!("failed to parse {}, reverting to defaults {}", FILE_NAME, e);
+                error!(err=%e, "failed to parse {FILE_NAME}, reverting to defaults");
                 BoopStorage::default()
             });
         }
@@ -74,13 +74,13 @@ impl BoopStorage {
         let toml = match toml::to_string(&self) {
             Ok(toml) => toml,
             Err(e) => {
-                error!("failed to serialize config to string: {}", e);
+                error!(err=%e, "failed to serialize boop storage to string");
                 panic!();
             }
         };
 
-        if let Err(err) = fs::write(FILE_NAME, toml) {
-            error!("failed to write to {}: {}", FILE_NAME, err);
+        if let Err(e) = fs::write(FILE_NAME, toml) {
+            error!(err=%e, "failed to write boop storage to {FILE_NAME}");
             return;
         }
 

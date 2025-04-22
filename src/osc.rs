@@ -1,12 +1,12 @@
 use std::{
-    net::{SocketAddrV4, UdpSocket},
+    net::SocketAddr,
     ops::Add,
-    str::FromStr,
 };
 
 use jiff::{SignedDuration, Timestamp};
-use log::{debug, error, info};
 use rosc::{OscMessage, OscPacket, OscType};
+use tokio::net::UdpSocket;
+use tracing::{debug, error, info};
 
 use crate::storage::BoopStorage;
 
@@ -14,8 +14,12 @@ pub(crate) struct OscBooper {
     /// Our receiving socket
     socket: UdpSocket,
 
-    /// VRChat/OSC receiver socket
-    osc_receiver: SocketAddrV4,
+    /// Our OSC port
+    /// Stored separated for ease of access
+    pub(crate) osc_port: u16,
+
+    /// VRChat/OSC receiver address
+    osc_receiver: SocketAddr,
 
     /// Boop counter storage
     storage: BoopStorage,
@@ -25,24 +29,23 @@ pub(crate) struct OscBooper {
 }
 
 impl OscBooper {
-    pub fn new(listen_port: u16, send_port: u16) -> Self {
-        let socket = match UdpSocket::bind(format!("127.0.0.1:{listen_port}")) {
-            Ok(sock) => sock,
-            Err(e) => {
-                error!("failed to bind socket: {}", e);
-                std::process::exit(1);
-            }
-        };
-        let osc_receiver = match SocketAddrV4::from_str(format!("127.0.0.1:{send_port}").as_str()) {
-            Ok(addr) => addr,
-            Err(e) => {
-                error!("port seems to be invalid: {}", e);
-                std::process::exit(1);
-            }
-        };
+    pub async fn new(send_port: u16) -> Self {
+        let socket = UdpSocket::bind("127.0.0.1:0")
+            .await
+            .map_err(|e| {
+                error!(err=%e, "failed to bind osc socket");
+            })
+            .unwrap();
+        let listen_addr = socket.local_addr().unwrap();
+
+        let osc_receiver: SocketAddr = ([127u8, 0, 0, 1], send_port).into();
+
+        info!("receiving osc packets on {}", listen_addr);
+        info!("sending osc packets to {}", osc_receiver);
 
         OscBooper {
             socket,
+            osc_port: listen_addr.port(),
             osc_receiver,
             storage: BoopStorage::load(),
             last_message: Timestamp::now(),
@@ -52,23 +55,22 @@ impl OscBooper {
 
 impl OscBooper {
     /// Main program loop
-    pub(crate) fn run(&mut self) {
-        // todo: is that buffer big enough? otherwise 4096 should be plenty
+    pub(crate) async fn run(&mut self) {
         let mut buf = [0u8; rosc::decoder::MTU];
 
         loop {
-            match self.socket.recv_from(&mut buf) {
+            match self.socket.recv_from(&mut buf).await {
                 Ok((size, addr)) => {
                     let packet = match rosc::decoder::decode_udp(&buf[..size]) {
                         Ok((_, packet)) => Some(packet),
                         Err(e) => {
-                            error!("failed to parse packet on {}: {}", addr, e);
+                            error!(err=%e, "failed to parse packet from {addr}");
                             None
                         }
                     };
 
                     if let Some(packet) = packet {
-                        self.handle_packet(packet);
+                        self.handle_packet(packet).await;
                     }
                 }
                 Err(e) => {
@@ -80,14 +82,16 @@ impl OscBooper {
     }
 
     /// Handle received OSC packet
-    fn handle_packet(&mut self, packet: OscPacket) {
+    async fn handle_packet(&mut self, packet: OscPacket) {
         match packet {
             OscPacket::Message(msg) => {
-                debug!(
-                    "OSC message address: {}, arguments: {:?}",
-                    msg.addr, msg.args
-                );
-                self.handle_message(&msg);
+                if !msg.addr.ends_with("FluffSquishUpper") {
+                    debug!(
+                        "OSC message address: {}, arguments: {:?}",
+                        msg.addr, msg.args
+                    );
+                }
+                self.handle_message(&msg).await;
             }
             OscPacket::Bundle(bundle) => {
                 info!("OSC Bundle: {:?}", bundle);
@@ -96,8 +100,10 @@ impl OscBooper {
     }
 
     /// Handle received OSC message
-    fn handle_message(&mut self, message: &OscMessage) {
-        if message.addr.ends_with("/OSCBoop") && !message.args.is_empty(){
+    async fn handle_message(&mut self, message: &OscMessage) {
+        // todo: make the address configurable. don't forget to also change inside
+        // OSCQuery server
+        if message.addr.ends_with("/OSCBoop") && !message.args.is_empty() {
             // skip when contact sender leaves receiver bubble
             // let's assume that only bools will be sent
             if let OscType::Bool(false) = message.args[0] {
@@ -112,10 +118,10 @@ impl OscBooper {
                 return;
             }
 
-            self.publish_chatbox(message);
-        } else if message.addr.ends_with("/BoopSave") {
-            self.storage.save();
+            self.publish_chatbox(message).await;
         } else if message.addr == "/avatar/change" {
+            // this event fires on map changes (usually) and on avatar change
+
             if message.args.is_empty() {
                 error!("expected avatar id in message, got {:?}", message.args);
                 return;
@@ -124,18 +130,12 @@ impl OscBooper {
             let avatar_id = message.args[0].to_string();
             info!("avatar switched to {avatar_id}");
 
-            // todo: listen to avatar change event (/avatar/change) and then
-            // query if avatar is compatible via OSC capability
-            // query https://github.com/vrchat-community/osc/wiki/OSCQuery
-            // https://github.com/Vidvox/OSCQueryProposal
-            // todo: advertise configured port and receive data
-
-            // world or avatar swap, save unconditionally
             self.storage.save();
         }
 
         // save storage if it's been a while
         // due to the amount of messages spammed every second, this should be fine™
+        // (/avatar/parameters/* gets spammed multiple times per second)
         if self.storage.time_to_save() {
             self.storage.save();
         }
@@ -143,7 +143,7 @@ impl OscBooper {
 
     /// send string to VRChat chatbox
     /// https://docs.vrchat.com/docs/osc-as-input-controller
-    fn publish_chatbox(&mut self, message: String) {
+    async fn publish_chatbox(&mut self, message: String) {
         let packet = OscPacket::Message(OscMessage {
             addr: "/chatbox/input".into(),
             // message | send immediately, bypass keyboard | don't trigger SFX
@@ -157,14 +157,14 @@ impl OscBooper {
         let msg_buf = match rosc::encoder::encode(&packet) {
             Ok(buf) => Some(buf),
             Err(e) => {
-                error!("failed to encode chatbox packet: {}", e);
+                error!(err=%e, "failed to encode chatbox packet");
                 None
             }
         };
 
         if let Some(msg_buf) = msg_buf {
-            if let Err(e) = self.socket.send_to(&msg_buf, self.osc_receiver) {
-                error!("failed to send message to chatbox: {}", e);
+            if let Err(e) = self.socket.send_to(&msg_buf, self.osc_receiver).await {
+                error!(err=%e, "failed to send message to chatbox");
             }
         }
 
