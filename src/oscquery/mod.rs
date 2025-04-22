@@ -1,7 +1,7 @@
 use std::{collections::HashMap, net::SocketAddr};
 
 use oscquery::{
-    node::{AccessMode, HostInfo, OSCTransport, OscNode, OscType, OscTypeTag},
+    node::{AccessMode, HostInfo, OSCTransport, OscNode},
     server::OscQueryServer,
 };
 use rand::distr::{Alphanumeric, SampleString};
@@ -55,30 +55,12 @@ async fn start_oscjson_server(
     })
     .with_address(socket_addr);
 
-    let mut avatar_contents = HashMap::new();
-    avatar_contents.insert(
-        "change".to_string(),
-        OscNode::new("/avatar/change")
-            .with_access(AccessMode::None)
-            .with_type(OscTypeTag::new(vec![OscType::OscString])),
-    );
-
+    // listen for all avatar events, including change and parameters
+    // boop (contact receivers) should be part of parameters
     server
         .add_node(
             "/avatar",
-            OscNode::new("/avatar")
-                .with_access(AccessMode::None)
-                .with_contents(avatar_contents),
-        )
-        .await
-        .unwrap();
-
-    server
-        .add_node(
-            "/OSCBoop",
-            OscNode::new("/OSCBoop")
-                .with_access(AccessMode::ReadOnly)
-                .with_type(OscTypeTag::new(vec![OscType::True, OscType::False])),
+            OscNode::new("/avatar").with_access(AccessMode::None),
         )
         .await
         .unwrap();

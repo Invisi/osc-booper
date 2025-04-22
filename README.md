@@ -1,7 +1,7 @@
 # osc-booper
 
 osc-booper is an [OSC](https://en.wikipedia.org/wiki/Open_Sound_Control)-based CLI tool that listens for messages on the
-channel `/OSCBoop` and sends boop statistics
+channel `/OSCBoop` (configurable) and sends boop statistics
 to the [VRChat chatbox](https://docs.vrchat.com/docs/osc-as-input-controller).
 
 For a ready-to-use unity package & software, check out ValueFactory's [Boop Counter](https://boop.shader.gay).

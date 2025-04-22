@@ -1,4 +1,3 @@
-
 use dotenvy::dotenv;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -24,7 +23,7 @@ async fn main() {
     // todo: get sending port from VRC mDNS response
 
     let opt = Options::new();
-    let mut osc = OscBooper::new(opt.send).await;
+    let mut osc = OscBooper::new(opt.send, opt.boop_address.as_str()).await;
 
     // set up OSCQuery & mDNS announcements
     oscquery::announce(token.clone(), osc.osc_port).await;

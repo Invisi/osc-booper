@@ -17,11 +17,19 @@ pub(crate) struct Cli {
     /// Create config.toml with specified/default values
     #[arg(long, default_value_t = false)]
     save: bool,
+
+    /// OSC parameter suffix for boops
+    ///
+    /// Matching is done via str.ends_with({boop_address})
+    #[arg(short, long, default_value = "/OSCBoop")]
+    boop_address: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct Options {
     pub send: u16,
+    #[serde(default = "default_boop_address")]
+    pub boop_address: String,
 }
 
 impl Options {
@@ -32,6 +40,7 @@ impl Options {
         let mut options = Options::load().unwrap_or({
             Options {
                 send: args.send.unwrap_or(9000),
+                boop_address: args.boop_address,
             }
         });
 
@@ -89,4 +98,8 @@ impl Options {
             error!(err=%e, "failed to write config to {FILE_NAME}");
         }
     }
+}
+
+fn default_boop_address() -> String {
+    "/OSCBoop".into()
 }

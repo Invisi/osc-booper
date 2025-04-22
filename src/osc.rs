@@ -8,7 +8,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::storage::BoopStorage;
 
-pub(crate) struct OscBooper {
+pub(crate) struct OscBooper<'a> {
     /// Our receiving socket
     socket: UdpSocket,
 
@@ -24,10 +24,13 @@ pub(crate) struct OscBooper {
 
     /// Last sent timestamp, used for cooldown
     last_message: Timestamp,
+
+    /// Suffix for boops
+    boop_address: &'a str,
 }
 
-impl OscBooper {
-    pub async fn new(send_port: u16) -> Self {
+impl<'a> OscBooper<'a> {
+    pub async fn new(send_port: u16, boop_address: &'a str) -> Self {
         let socket = UdpSocket::bind("127.0.0.1:0")
             .await
             .map_err(|e| {
@@ -45,13 +48,12 @@ impl OscBooper {
             socket,
             osc_port: listen_addr.port(),
             osc_receiver,
+            boop_address,
             storage: BoopStorage::load(),
             last_message: Timestamp::now(),
         }
     }
-}
 
-impl OscBooper {
     /// Main program loop
     pub(crate) async fn run(&mut self, token: CancellationToken) {
         let mut buf = [0u8; rosc::decoder::MTU];
@@ -113,9 +115,7 @@ impl OscBooper {
 
     /// Handle received OSC message
     async fn handle_message(&mut self, message: &OscMessage) {
-        // todo: make the address configurable. don't forget to also change inside
-        // OSCQuery server
-        if message.addr.ends_with("/OSCBoop") && !message.args.is_empty() {
+        if message.addr.ends_with(self.boop_address) && !message.args.is_empty() {
             // skip when contact sender leaves receiver bubble
             // let's assume that only bools will be sent
             if let OscType::Bool(false) = message.args[0] {
