@@ -109,51 +109,8 @@ impl BoopStorage {
         }
     }
 
-    pub(crate) fn generate_message(&self) -> (String, bool) {
-        let funny_today = if let Some(text) = self.funny_number_text(self.today_boops as u64) {
-            format!(" {text}")
-        } else {
-            "".into()
-        };
-
-        let funny_total = if let Some(text) = self.funny_number_text(self.total_boops) {
-            format!(" {text}")
-        } else {
-            "".into()
-        };
-
-        let is_funny = !funny_today.is_empty() || !funny_total.is_empty();
-
-        (
-            format!(
-                "Today: {}{}\nTotal: {}{}",
-                self.today_boops, funny_today, self.total_boops, funny_total
-            )
-            .to_string(),
-            is_funny,
-        )
-    }
-
-    fn funny_number_text(&self, number: u64) -> Option<&str> {
-        // todo: could probably make this configurable as a section
-        //      inside config.toml
-        if number % 100 == 69 {
-            return Some("Nice");
-        }
-        if number % 1000 == 420 {
-            return Some("blaze it");
-        }
-        if number % 1000 == 621 {
-            return Some("owo");
-        }
-        if number % 1000 == 666 {
-            return Some("ooOooO scary");
-        }
-        if number % 10000 == 1337 {
-            return Some("much leet so wow");
-        }
-
-        None
+    pub(crate) fn boop_numbers(&self) -> (u32, u64) {
+        (self.today_boops, self.total_boops)
     }
 
     /// Check if today's boops should be reset

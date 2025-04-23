@@ -29,4 +29,10 @@ osc-booper --send 9000 --save
 
 For more details, check the help via `osc-booper --help`.
 
-The listen port will be auto-negotiated with VRChat via OSCQuery & mDNS service discovery.
+Custom text suffixes can be registered inside the `config.toml`, which can be created via `osc-booper --save`.
+
+# Technical details
+
+The OSC UDP listening announced to VRChat via [mDNS](/src/oscquery/mdns.rs)
+service discovery and [OSCQuery](/src/oscquery/mod.rs).
+See VRChat community [wiki article](https://github.com/vrchat-community/osc/wiki/OSCQuery) for some details.

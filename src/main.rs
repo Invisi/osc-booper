@@ -23,7 +23,9 @@ async fn main() {
     // todo: get sending port from VRC mDNS response
 
     let opt = Options::new();
-    let mut osc = OscBooper::new(opt.send, opt.boop_address.as_str()).await;
+
+    // set up OSC listener/responder & main loop
+    let mut osc = OscBooper::new(opt).await;
 
     // set up OSCQuery & mDNS announcements
     oscquery::announce(token.clone(), osc.osc_port).await;
@@ -71,6 +73,7 @@ async fn setup_signal_handlers(token: CancellationToken) {
 async fn setup_signal_handlers(token: CancellationToken) {
     // https://docs.rs/tokio/latest/tokio/signal/windows/index.html
     // https://learn.microsoft.com/en-us/windows/console/console-control-handlers
+    // https://learn.microsoft.com/en-us/windows/console/handlerroutine
     use tokio::signal::windows;
 
     let mut ctrl_break = windows::ctrl_break().unwrap();
