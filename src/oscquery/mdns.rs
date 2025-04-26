@@ -183,7 +183,7 @@ impl<'a> MdnsServer<'a> {
             if let Some(msg) = msg {
                 match self.socket.send_to(&msg, (IPV4_MDNS, MDNS_PORT)).await {
                     Ok(bytes_written) => {
-                        debug!(addr=%peer, size=%bytes_written, "response sent off");
+                        trace!(addr=%peer, size=%bytes_written, "response sent off");
                     }
                     Err(e) => {
                         error!(addr=%peer, err=%e, "failed to send response");
@@ -210,7 +210,7 @@ impl<'a> MdnsServer<'a> {
         let service_name = question.name().to_string();
         let responses = self.known_records.get(service_name.as_str());
         if responses.is_none() {
-            debug!(addr=%peer, service_name=%service_name, "skipping response");
+            trace!(addr=%peer, service_name=%service_name, "skipping response");
             return None;
         }
 

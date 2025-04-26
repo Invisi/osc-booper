@@ -1,10 +1,10 @@
-use std::{net::SocketAddr, ops::Add};
+use std::{net::SocketAddr, ops::Add, sync::Arc, time::Duration};
 
 use jiff::{SignedDuration, Timestamp};
 use rosc::{OscMessage, OscPacket, OscType};
-use tokio::net::UdpSocket;
+use tokio::{net::UdpSocket, sync::Mutex};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     config::{Options, TextSuffixResult},
@@ -13,7 +13,7 @@ use crate::{
 
 pub(crate) struct OscBooper<'a> {
     /// Our receiving socket
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
 
     /// Our OSC port
     /// Stored separated for ease of access
@@ -33,6 +33,9 @@ pub(crate) struct OscBooper<'a> {
 
     /// Our settings/options
     options: Options,
+
+    /// channel to notify chatbox clearing thread
+    clear_tx: Option<tokio::sync::mpsc::Sender<()>>,
 }
 
 impl<'a> OscBooper<'a> {
@@ -54,13 +57,14 @@ impl<'a> OscBooper<'a> {
         let boop_address = options.boop_address.clone().leak();
 
         OscBooper {
-            socket,
+            socket: Arc::new(socket),
             boop_address,
             options,
             osc_port: listen_addr.port(),
             osc_receiver,
             storage: BoopStorage::load(),
             last_message: Timestamp::now(),
+            clear_tx: None,
         }
     }
 
@@ -68,9 +72,16 @@ impl<'a> OscBooper<'a> {
     pub(crate) async fn run(&mut self, token: CancellationToken) {
         let mut buf = [0u8; rosc::decoder::MTU];
 
+        let main_socket = self.socket.clone();
+        let clearing_socket = self.socket.clone();
+        let osc_clone = self.osc_receiver;
+
+        let (clear_tx, clear_rx) = tokio::sync::mpsc::channel(32);
+        self.clear_tx = Some(clear_tx);
+
         let mut listener_loop = async || {
             loop {
-                match self.socket.recv_from(&mut buf).await {
+                match main_socket.recv_from(&mut buf).await {
                     Ok((size, addr)) => {
                         let packet = match rosc::decoder::decode_udp(&buf[..size]) {
                             Ok((_, packet)) => Some(packet),
@@ -97,6 +108,9 @@ impl<'a> OscBooper<'a> {
             }
             _ = listener_loop() => {
                 warn!("osc listener stopped unexpectedly");
+            }
+            _ = clear_chatbox_loop(clear_rx, clearing_socket, osc_clone) => {
+                warn!("chatbox clearing loop stopped unexpectedly");
             }
         }
 
@@ -140,7 +154,7 @@ impl<'a> OscBooper<'a> {
                 return;
             }
 
-            self.publish_chatbox(message).await;
+            self.send_message(message).await;
         } else if message.addr == "/avatar/change" {
             // this event fires on map changes (usually) and on avatar change
 
@@ -163,36 +177,14 @@ impl<'a> OscBooper<'a> {
         }
     }
 
-    /// send string to VRChat chatbox
-    /// https://docs.vrchat.com/docs/osc-as-input-controller
-    async fn publish_chatbox(&mut self, message: String) {
-        let packet = OscPacket::Message(OscMessage {
-            addr: "/chatbox/input".into(),
-            args: vec![
-                // message
-                OscType::String(message),
-                // send immediately, bypass keyboard input
-                OscType::Bool(true),
-                // don't trigger SFX
-                OscType::Bool(false),
-            ],
-        });
-
-        let msg_buf = match rosc::encoder::encode(&packet) {
-            Ok(buf) => Some(buf),
-            Err(e) => {
-                error!(err=%e, "failed to encode chatbox packet");
-                None
-            }
-        };
-
-        if let Some(msg_buf) = msg_buf {
-            if let Err(e) = self.socket.send_to(&msg_buf, self.osc_receiver).await {
-                error!(err=%e, "failed to send message to chatbox");
-            }
-        }
-
+    async fn send_message(&mut self, message: String) {
+        publish_chatbox(&self.socket, self.osc_receiver, message).await;
         self.last_message = Timestamp::now();
+
+        // notify clear thread
+        if let Some(tx) = &self.clear_tx {
+            tx.send(()).await.ok();
+        }
     }
 
     /// Whether we should send a chat message again
@@ -235,5 +227,67 @@ impl<'a> OscBooper<'a> {
         }
 
         None
+    }
+}
+
+/// send empty message to chatbox after main message has been sent
+async fn clear_chatbox_loop(
+    mut rx: tokio::sync::mpsc::Receiver<()>,
+    socket: Arc<UdpSocket>,
+    addr: SocketAddr,
+) {
+    let debounce_mutex: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>> =
+        Arc::new(Mutex::new(None));
+
+    while rx.recv().await.is_some() {
+        let mut task = debounce_mutex.lock().await;
+
+        // cancel running thread
+        if let Some(handle) = task.take() {
+            trace!("cancelling existing clear task");
+            handle.abort();
+        }
+
+        // wait a bit and then send clear
+        let socket_clone = socket.clone();
+        *task = Some(tokio::spawn(async move {
+            trace!("waiting for clear timeout");
+            tokio::time::sleep(Duration::from_secs(4)).await;
+            publish_chatbox(&socket_clone, addr, "".into()).await;
+            trace!("sent chatbox clear");
+        }));
+    }
+}
+
+/// create buffer for OSC chatbox message
+/// https://docs.vrchat.com/docs/osc-as-input-controller
+fn make_msg_buffer(message: String) -> Option<Vec<u8>> {
+    let packet = OscPacket::Message(OscMessage {
+        addr: "/chatbox/input".into(),
+        args: vec![
+            // message
+            OscType::String(message),
+            // send immediately, bypass keyboard input
+            OscType::Bool(true),
+            // don't trigger SFX
+            OscType::Bool(false),
+        ],
+    });
+
+    match rosc::encoder::encode(&packet) {
+        Ok(buf) => Some(buf),
+        Err(e) => {
+            error!(err=%e, "failed to encode chatbox packet");
+            None
+        }
+    }
+}
+
+/// send string to VRChat chatbox
+async fn publish_chatbox(socket: &UdpSocket, addr: SocketAddr, message: String) {
+    if let Some(msg_buf) = make_msg_buffer(message) {
+        if let Err(e) = socket.send_to(&msg_buf, addr).await {
+            error!(err=%e, "failed to send message to chatbox");
+        }
     }
 }
